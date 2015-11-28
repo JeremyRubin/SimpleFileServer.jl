@@ -39,15 +39,21 @@ end
 function HandleFileCommand(conn, args::Download, base::AbstractString)
     safePath(base, args.name) do path
         try
-            a = if isnull(args.n_bytes_offset)
+            if isfile(path)
+                a = if isnull(args.n_bytes_offset)
                     Mmap.mmap(path, Array{UInt8,1})
                 else
                     n_bytes, offset = args.n_bytes_offset.value
                     # TODO figure out right way to do this
                     Mmap.mmap(path, Array{UInt8,1})[n_bytes:offset+n_bytes]
                 end
-            serialize(conn, length(a))
-            write(conn, a)
+
+                serialize(conn, length(a))
+                write(conn, a)
+            else
+                serialize(conn, -1)
+
+            end
         catch err
             #TODO Don't use this -- what's a better solution thought?
             serialize(conn, -1)
@@ -59,6 +65,7 @@ end
 function HandleFileCommand(conn, args::Delete, base::AbstractString)
     try
         safePath(base, args.name) do path
+            @debug path
             rm(path)
         end
         serialize(conn, Nullable())
@@ -70,9 +77,9 @@ function HandleFileCommand(conn, up::Upload, base::AbstractString)
     args = up.f
     safePath(base, args.name) do path
         if length(args.hash) != 64
-            throw(ErrorException("Malformed Hash"))
+            serialize(conn,Nullable(ErrorException("Malformed Hash")))
         elseif isfile(path)
-            throw(ErrorException("File Already Exists"))
+            serialize(conn,Nullable(ErrorException("File Already Exists")))
         end
         open(path, "w+") do f
             a = Mmap.mmap(f, Array{UInt8, 1}, args.size)
@@ -81,7 +88,7 @@ function HandleFileCommand(conn, up::Upload, base::AbstractString)
         end
         if SHA.sha256(open(path)) != args.hash
             rm(path)
-            throw(ErrorException("File did not hash properly"))
+            serialize(conn,Nullable(ErrorException("File did not Hash Properly")))
         end
         serialize(conn,Nullable{ErrorException}())
     end
@@ -163,7 +170,7 @@ function upload(c::t, f::File, m::Array{UInt8,1})
     @info "Uploading wrote $(b) bytes"
     m_err = deserialize(conn)
     if !isnull(m_err)
-         throw(m_err.value)
+        throw(m_err.value)
     end
     close(conn)
 end
