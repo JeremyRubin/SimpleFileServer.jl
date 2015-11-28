@@ -1,4 +1,4 @@
-using FileServerNode
+using SimpleFileServer
 using Logging
 @Logging.configure(level=DEBUG)
 using Base.Test
@@ -11,21 +11,21 @@ mktempdir()do d
     orig = Mmap.mmap(testdata, Array{UInt8, 1})
     fn = "$d/file"
     to = "$d/file2"
-    @async FileServerNode.start(8080,d )
-    client = FileServerNode.Client.make("localhost", 8080)
-    f = FileServerNode.Client.upload(client, fn, testdata)
+    @async SimpleFileServer.start(8080,d, ()->())
+    client = SimpleFileServer.Client.make("localhost", 8080)
+    f = SimpleFileServer.Client.upload(client, fn, testdata)
     @info f
-    dl = FileServerNode.Client.download(client, fn, to)
+    dl = SimpleFileServer.Client.download(client, fn, to)
     @test orig == dl
-    dl = FileServerNode.Client.download(client, fn, to, 10, 10)
+    dl = SimpleFileServer.Client.download(client, fn, to, 10, 10)
     @test orig[10:20] == dl
-    @info FileServerNode.Client.delete(client, fn)
+    @info SimpleFileServer.Client.delete(client, fn)
 
-    err = @test_throws Base.UVError FileServerNode.Client.delete(client, fn)
+    err = @test_throws Base.UVError SimpleFileServer.Client.delete(client, fn)
     @info err
     
     
-    err = @test_throws Base.UVError FileServerNode.Client.download(client, fn, to)
+    err = @test_throws Base.UVError SimpleFileServer.Client.download(client, fn, to)
     @info err
     
 

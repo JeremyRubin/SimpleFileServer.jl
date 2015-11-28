@@ -1,1 +1,1 @@
-# FileServerNode
+# SimpleFileServer
