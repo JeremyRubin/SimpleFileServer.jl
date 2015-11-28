@@ -149,7 +149,7 @@ function download(client::t, name::ASCIIString, to::ASCIIString, n_bytes_offset:
     else
         m = Mmap.mmap(open(to, "w+"), Array{UInt8, 1}, s)
         readbytes!( conn, m, typemax(Int64))
-        sync!(m)
+        Mmap.sync!(m)
         m
     end
 end
