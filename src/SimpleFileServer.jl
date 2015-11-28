@@ -12,13 +12,16 @@ end
 abstract FileCommand
 
 # TODO: is this really safe?
-safePath(path::AbstractString)  = path |> expanduser |> abspath
-function safePath(f::Function,base::AbstractString, path::AbstractString)
-    p = safePath(path)
-    if startswith(p, base)
-        f(p)
+function safePath(f::Function,dirname::ASCIIString, path::ASCIIString)
+    if contains(path, "..")
+        throw(ErrorException("Path not allowed to contain '..'"))
+    elseif contains(path, "~")
+        throw(ErrorException("Path not allowed to contain '~'"))
+    elseif startswith(path, "/") || endswith(path, "/")
+        throw(ErrorException("Path not allowed to start or end with '/'"))
+
     else
-        throw(ErrorException("Unsafe Path $path"))
+        joinpath(dirname, path)|> f
     end
 end
 
@@ -32,6 +35,7 @@ end
 type Upload <: FileCommand
     f::File
 end
+
 function HandleFileCommand(conn, args::Download, base::AbstractString)
     safePath(base, args.name) do path
         try
@@ -41,7 +45,6 @@ function HandleFileCommand(conn, args::Download, base::AbstractString)
                     n_bytes, offset = args.n_bytes_offset.value
                     # TODO figure out right way to do this
                     Mmap.mmap(path, Array{UInt8,1})[n_bytes:offset+n_bytes]
-
                 end
             serialize(conn, length(a))
             write(conn, a)
@@ -60,7 +63,6 @@ function HandleFileCommand(conn, args::Delete, base::AbstractString)
         end
         serialize(conn, Nullable())
     catch err
-        @show typeof(err)
         serialize(conn, Nullable(err))
     end
 end
@@ -69,13 +71,12 @@ function HandleFileCommand(conn, up::Upload, base::AbstractString)
     safePath(base, args.name) do path
         if length(args.hash) != 64
             throw(ErrorException("Malformed Hash"))
-        end
-        if isfile(path)
+        elseif isfile(path)
             throw(ErrorException("File Already Exists"))
         end
         open(path, "w+") do f
             a = Mmap.mmap(f, Array{UInt8, 1}, args.size)
-            read!(conn, a)
+            readbytes!(conn, a, args.size)
             Mmap.sync!(a)
         end
         if SHA.sha256(open(path)) != args.hash
@@ -87,26 +88,26 @@ function HandleFileCommand(conn, up::Upload, base::AbstractString)
 end
 
 function start(port::Int64, base::AbstractString, setup::Function)
+    base = base |>  expanduser |> realpath # Need to get rid of links
     @info "Starting SimpleFileServer on port $port in path $base"
     server = listen(port)
     setup()
     while  true
         conn = accept(server)
-        @debug "Got a Connection"
+        @debug "SimpleFileServer on $port has an incoming connection"
         @async begin
-            while true
+            try
+                args = deserialize(conn)::FileCommand
+                @debug args
                 try
-                    args = deserialize(conn)::FileCommand
-                    @debug args
                     HandleFileCommand(conn, args, base)
                 catch err
-                    @debug err
-                    # serialize(conn, Nullable(err))
-                    close(conn)
-                    break
-                finally 
-                    close(conn)
+                    @debug "Error While Handling: $err"
                 end
+            catch err
+                @debug "Error While Deserializing : $err"
+            finally 
+                close(conn)
             end
         end
     end
@@ -114,7 +115,7 @@ end
 
 function main()
     port = parse(Int64, ARGS[1])
-    base = safePath(args[2])
+    base = args[2]
     
     start(port, base)
 end
@@ -122,6 +123,8 @@ end
 module Client
 using SHA
 using SimpleFileServer: Upload, Download, Delete, File
+using Logging
+@Logging.configure(level=DEBUG)
 export make, download, upload, delete
 immutable t
     host::AbstractString
@@ -146,25 +149,23 @@ function download(client::t, name::ASCIIString, to::ASCIIString, n_bytes_offset:
     else
         m = Mmap.mmap(open(to, "w+"), Array{UInt8, 1}, s)
         readbytes!( conn, m, typemax(Int64))
+        sync!(m)
         m
     end
 end
 download(client::t, name::ASCIIString, to::ASCIIString, n_bytes::Integer, offset::Integer)= download(client, name, to, Nullable((n_bytes,offset)))
 download(client::t, name::ASCIIString, to::ASCIIString)= download(client, name, to, Nullable{Tuple{Int64, Int64}}())
-function upload(c::t, name::ASCIIString,m::Array{UInt8, 1})
-    f = File(name, SHA.sha256(m), length(m))
-    upload(c, f, m)
-    f
-end
 function upload(c::t, f::File, m::Array{UInt8,1})
     conn = t_connect(c)
     serialize(conn, Upload(f))
-    write(conn, m)
+    b =write(conn, m)
     flush(conn)
+    @info "Uploading wrote $(b) bytes"
     m_err = deserialize(conn)
     if !isnull(m_err)
-        throw(m_err.value)
+         throw(m_err.value)
     end
+    close(conn)
 end
 
 function upload(c::t, name::ASCIIString,m::Array{UInt8, 1})
