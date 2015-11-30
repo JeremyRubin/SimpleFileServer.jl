@@ -1,3 +1,4 @@
+__precompile__()
 module SimpleFileServer
 immutable File
     name::ASCIIString
@@ -20,14 +21,14 @@ function safePath(f::Function,dirname::ASCIIString, path::ASCIIString)
     end
 end
 
-type Download <: FileCommand
+immutable Download <: FileCommand
     name::ASCIIString
     n_bytes_offset::Nullable{Tuple{Integer,Integer}}
 end
-type Delete <: FileCommand
+immutable Delete <: FileCommand
     name::ASCIIString
 end
-type Upload <: FileCommand
+immutable Upload <: FileCommand
     f::File
 end
 
@@ -47,7 +48,7 @@ function HandleFileCommand(conn, args::Download, base::AbstractString)
                     @debug s, offset
                     seek(f, offset)
                     @debug "seeked"
-                    buffer = Array{UInt8,1}(Mmap.PAGESIZE)
+                    buffer = Vector{UInt8}(Mmap.PAGESIZE)
                     while n_bytes != 0
                         b = readbytes!(f, buffer, min(Mmap.PAGESIZE, n_bytes))
                         write(conn, buffer[1:b])
@@ -89,7 +90,7 @@ function HandleFileCommand(conn, up::Upload, base::AbstractString)
             serialize(conn,Nullable(ErrorException("File Already Exists")))
         end
         open(path, "w+") do f
-            buffer = Array{UInt8,1}(Mmap.PAGESIZE)
+            buffer = Vector{UInt8}(Mmap.PAGESIZE)
             while s != 0
                 nbytes = readbytes!(conn, buffer, min(s, Mmap.PAGESIZE))
                 write(f, buffer[1:nbytes])
@@ -164,7 +165,7 @@ function download(client::t, name::ASCIIString, to::IOStream, n_bytes_offset::Nu
         throw(Base.UVError("Remote Server $(client.host):$(client.port)", Base.UV_ENOENT))
     elseif s == 0
     else
-        buffer = Array{UInt8,1}( Mmap.PAGESIZE)
+        buffer = Vector{UInt8}( Mmap.PAGESIZE)
         while s != 0
             # TODO is this zero copy
             b = readbytes!(conn, buffer, min(s, Mmap.PAGESIZE) )
@@ -175,15 +176,15 @@ function download(client::t, name::ASCIIString, to::IOStream, n_bytes_offset::Nu
     end
     ()
 end
-function download(client::t, name::ASCIIString, to::ASCIIString, n_bytes_offset::Nullable{Tuple{Int64, Int64}})
-    open(to, "w+") do f
+function download(client::t, name::ASCIIString, to::ASCIIString, n_bytes_offset::Nullable{Tuple{Int64, Int64}}, append::Bool=false)
+    open(to, append ? "a+":"w+") do f
         download(client, name, f, n_bytes_offset)
     end
-    Mmap.mmap(to, Array{UInt8, 1})
+    Mmap.mmap(to, Vector{UInt8})
 end
-download(client::t, name::ASCIIString, to::ASCIIString, n_bytes::Integer, offset::Integer)= download(client, name, to, Nullable((n_bytes,offset)))
-download(client::t, name::ASCIIString, to::ASCIIString)= download(client, name, to, Nullable{Tuple{Int64, Int64}}())
-function upload(c::t, f::File, m::Array{UInt8,1})
+download(client::t, name::ASCIIString, to::ASCIIString, n_bytes::Integer, offset::Integer, append::Bool=false )= download(client, name, to, Nullable((n_bytes,offset)), append)
+download(client::t, name::ASCIIString, to::ASCIIString, append::Bool)= download(client, name, to, Nullable{Tuple{Int64, Int64}}(), append::Bool=false)
+function upload(c::t, f::File, m::Vector{UInt8})
     conn = t_connect(c)
     serialize(conn, Upload(f))
     b =write(conn, m)
@@ -196,14 +197,14 @@ function upload(c::t, f::File, m::Array{UInt8,1})
     close(conn)
 end
 
-function upload(c::t, name::ASCIIString,m::Array{UInt8, 1})
+function upload(c::t, name::ASCIIString,m::Vector{UInt8})
     f = File(name, SHA.sha256(m), length(m))
     upload(c, f, m)
     f
 end
 function upload(c::t, name::ASCIIString, path::ASCIIString)
     open(path, "r") do f
-        m = Mmap.mmap(f, Array{UInt8,1})
+        m = Mmap.mmap(f, Vector{UInt8})
         upload(c, name, m)
     end
 end

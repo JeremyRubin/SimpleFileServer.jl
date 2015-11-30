@@ -12,18 +12,23 @@ a = addprocs(1)
         end
     end
 end
-mktempdir() do d2
-    fn = "file"
-    to = "$d2/file"
+Profile.clear()
+function test_setup(f::Function)
+    mktempdir() do d2
+        fn = "file"
+        to = "$d2/file"
 
-    # Test with one page
-    name, handle = mktemp(d2)
-    orig = Mmap.mmap(handle, Array{UInt8, 1}, 1000)
-    rand!(orig)
-    Mmap.sync!(orig)
-    client = SimpleFileServer.Client.make("localhost", 8080)
+        # Test with one page
+        name, handle = mktemp(d2)
+        orig = Mmap.mmap(handle, Array{UInt8, 1}, 1000)
+        rand!(orig)
+        Mmap.sync!(orig)
+        client = SimpleFileServer.Client.make("localhost", 8080)
+        f(fn, to, orig, name, client)
+    end
+end
 
-    
+test_setup() do fn, to, orig, name,client
     f = SimpleFileServer.Client.upload(client, fn, orig )
     @info "Upload Completed using mmap"
     @debug f
@@ -49,14 +54,10 @@ mktempdir() do d2
 
     @debug SimpleFileServer.Client.delete(client, fn)
 
-
+end
     # Test with two pages
 
-    name, handle = mktemp(d2)
-    orig = Mmap.mmap(handle, Array{UInt8, 1}, 5000)
-    rand!(orig)
-    Mmap.sync!(orig)
-
+test_setup() do fn, to, orig, name, client
     f = SimpleFileServer.Client.upload(client, fn, orig )
     @info "Upload Completed using mmap"
     @debug f
@@ -79,7 +80,8 @@ mktempdir() do d2
     f = SimpleFileServer.Client.upload(client, fn, ASCIIString(name))
     @info "Upload Completed using file name, missing download did not re-create file"
     dl = SimpleFileServer.Client.download(client, fn, to)
-
     
 end
 
+
+Profile.print()
